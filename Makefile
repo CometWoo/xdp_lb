@@ -164,10 +164,16 @@ count_user: count_user.c
 count-build: xdp_tsn_count.o count_user
 
 count-load: xdp_tsn_count.o
-	-rm -rf /sys/fs/bpf/tsn_count /sys/fs/bpf/tsn_pkts /sys/fs/bpf/tsn_bytes 2>/dev/null
-	bpftool prog loadall xdp_tsn_count.o /sys/fs/bpf/tsn_count pinmaps /sys/fs/bpf
-	ip netns exec $(NS_S1) ip link set dev $(VETH_S1) xdpgeneric pinned /sys/fs/bpf/tsn_count/xdp_tsn_count
-	@echo "[count-load] attached: $(NS_S1):$(VETH_S1) (xdpgeneric)"
+	-ip netns exec $(NS_S1) bpftool net detach xdpgeneric dev $(VETH_S1) 2>/dev/null || true
+	-ip netns exec $(NS_S1) ip link set dev $(VETH_S1) xdp off 2>/dev/null || true
+	-rm -rf /sys/fs/bpf/tsn_count /sys/fs/bpf/tsn_prog 2>/dev/null
+	-rm -f  /sys/fs/bpf/tsn_pkts /sys/fs/bpf/tsn_bytes 2>/dev/null
+	bpftool prog load xdp_tsn_count.o /sys/fs/bpf/tsn_prog \
+	    type xdp pinmaps /sys/fs/bpf
+	@PROG_ID=$$(bpftool prog show pinned /sys/fs/bpf/tsn_prog | head -1 | cut -d: -f1); \
+	 echo "[count-load] prog id=$$PROG_ID -> $(NS_S1):$(VETH_S1)"; \
+	 ip netns exec $(NS_S1) bpftool net attach xdpgeneric id $$PROG_ID dev $(VETH_S1)
+	@echo "[count-load] attached"
 
 count-show:
 	@echo "--- tsn_pkts ---"
@@ -179,6 +185,8 @@ count-watch: count_user
 	./count_user
 
 count-unload:
+	-ip netns exec $(NS_S1) bpftool net detach xdpgeneric dev $(VETH_S1) 2>/dev/null
 	-ip netns exec $(NS_S1) ip link set dev $(VETH_S1) xdp off 2>/dev/null
-	-rm -rf /sys/fs/bpf/tsn_count /sys/fs/bpf/tsn_pkts /sys/fs/bpf/tsn_bytes
+	-rm -rf /sys/fs/bpf/tsn_count /sys/fs/bpf/tsn_prog
+	-rm -f  /sys/fs/bpf/tsn_pkts /sys/fs/bpf/tsn_bytes
 	@echo "[count-unload] done"
