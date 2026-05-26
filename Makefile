@@ -39,8 +39,8 @@ create:
 	ip link set $(VETH_C) netns $(NS_C)
 	ip link set $(VETH_RC) netns $(NS_R)
 
-	# Link: Server1 <-> Router
-	ip link add $(VETH_S1) type veth peer name $(VETH_RS1)
+	# Link: Server1 <-> Router  (multi-queue veth so taprio can map TC0/TC1 to distinct TX queues)
+	ip link add $(VETH_S1) numtxqueues 4 numrxqueues 4 type veth peer name $(VETH_RS1) numtxqueues 4 numrxqueues 4
 	ip link set $(VETH_S1) netns $(NS_S1)
 	ip link set $(VETH_RS1) netns $(NS_R)
 
