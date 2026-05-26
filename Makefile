@@ -156,7 +156,7 @@ experiment:
 
 # === eBPF packet counter (TSN verification) ===
 xdp_tsn_count.o: xdp_tsn_count.c
-	clang -O2 -g -Wall -target bpf -c $< -o $@
+	clang -O2 -g -Wall -target bpf -I/usr/include/$(shell uname -m)-linux-gnu -c $< -o $@
 
 count_user: count_user.c
 	clang $< -o $@ -lbpf
