@@ -21,7 +21,8 @@ IP_NET_C := 10.0.0
 IP_NET_S1 := 10.0.1
 IP_NET_S2 := 10.0.2
 
-.PHONY: all create teardown test info
+.PHONY: all create teardown test info tsn tsn-off tsn-show experiment \
+        count-build count-load count-show count-watch count-unload
 
 all: create info
 
@@ -124,3 +125,60 @@ info:
 	@echo " Server1 ($(NS_S1)): $(VETH_S1) IP: $(IP_NET_S1).2 (BW: 2.5Gbps)"
 	@echo " Server2 ($(NS_S2)): $(VETH_S2) IP: $(IP_NET_S2).2 (BW: 1Gbps)"
 	@echo "========================================"
+
+# === TSN qdisc (IEEE 802.1Qbv TAS via taprio) ===
+# Cycle 1ms = 200us(TT, TC0) + 800us(BE, TC1).
+# priority -> TC: 3 -> TC0(TT), all others -> TC1(BE).
+tsn:
+	@echo "[tsn] applying taprio to $(VETH_RS1) (cycle=1ms, TT=200us, BE=800us)"
+	-ip netns exec $(NS_R) tc qdisc del dev $(VETH_RS1) root 2>/dev/null || true
+	@BASE=$$(( $$(date +%s%N) + 1000000000 )); \
+	ip netns exec $(NS_R) tc qdisc replace dev $(VETH_RS1) parent root handle 100: taprio \
+	    num_tc 2 \
+	    map 1 1 1 0 1 1 1 1 1 1 1 1 1 1 1 1 \
+	    queues 1@0 1@1 \
+	    base-time $$BASE \
+	    sched-entry S 01 200000 \
+	    sched-entry S 02 800000 \
+	    clockid CLOCK_TAI
+
+# Revert taprio -> restore TBF bandwidth limit baseline.
+tsn-off:
+	@echo "[tsn-off] reverting $(VETH_RS1) to TBF (no time-aware shaping)"
+	-ip netns exec $(NS_R) tc qdisc del dev $(VETH_RS1) root 2>/dev/null || true
+	ip netns exec $(NS_R) tc qdisc add dev $(VETH_RS1) root tbf rate 2.5gbit burst 32kbit latency 400ms
+
+tsn-show:
+	ip netns exec $(NS_R) tc -s qdisc show dev $(VETH_RS1)
+
+experiment:
+	bash run_tsn_experiment.sh
+
+# === eBPF packet counter (TSN verification) ===
+xdp_tsn_count.o: xdp_tsn_count.c
+	clang -O2 -g -Wall -target bpf -c $< -o $@
+
+count_user: count_user.c
+	clang $< -o $@ -lbpf
+
+count-build: xdp_tsn_count.o count_user
+
+count-load: xdp_tsn_count.o
+	-rm -rf /sys/fs/bpf/tsn_count /sys/fs/bpf/tsn_pkts /sys/fs/bpf/tsn_bytes 2>/dev/null
+	bpftool prog loadall xdp_tsn_count.o /sys/fs/bpf/tsn_count pinmaps /sys/fs/bpf
+	ip netns exec $(NS_S1) ip link set dev $(VETH_S1) xdpgeneric pinned /sys/fs/bpf/tsn_count/xdp_tsn_count
+	@echo "[count-load] attached: $(NS_S1):$(VETH_S1) (xdpgeneric)"
+
+count-show:
+	@echo "--- tsn_pkts ---"
+	bpftool map dump pinned /sys/fs/bpf/tsn_pkts
+	@echo "--- tsn_bytes ---"
+	bpftool map dump pinned /sys/fs/bpf/tsn_bytes
+
+count-watch: count_user
+	./count_user
+
+count-unload:
+	-ip netns exec $(NS_S1) ip link set dev $(VETH_S1) xdp off 2>/dev/null
+	-rm -rf /sys/fs/bpf/tsn_count /sys/fs/bpf/tsn_pkts /sys/fs/bpf/tsn_bytes
+	@echo "[count-unload] done"
